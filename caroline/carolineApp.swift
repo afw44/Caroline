@@ -7,6 +7,7 @@
 
 import SwiftUI
 
+
 @main
 struct GiggleApp: App {
     var body: some Scene {
