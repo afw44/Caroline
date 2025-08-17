@@ -15,6 +15,11 @@
 		F8D4769D2E504484004D0AC4 /* carolineUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8D4769C2E504484004D0AC4 /* carolineUITests.swift */; };
 		F8D4769F2E504484004D0AC4 /* carolineUITestsLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8D4769E2E504484004D0AC4 /* carolineUITestsLaunchTests.swift */; };
 		F8D476AC2E50452F004D0AC4 /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8D476AB2E50452F004D0AC4 /* Config.swift */; };
+		F8D476B42E51F30A004D0AC4 /* genericUI.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8D476B32E51F30A004D0AC4 /* genericUI.swift */; };
+		F8D476B62E51F3D9004D0AC4 /* availabilityUI.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8D476B52E51F3D9004D0AC4 /* availabilityUI.swift */; };
+		F8D476B82E51F426004D0AC4 /* gigDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8D476B72E51F426004D0AC4 /* gigDetailView.swift */; };
+		F8D476BB2E521199004D0AC4 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8D476BA2E521199004D0AC4 /* AppState.swift */; };
+		F8D476BD2E5211C5004D0AC4 /* APIclient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8D476BC2E5211C5004D0AC4 /* APIclient.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -47,6 +52,11 @@
 		F8D4769C2E504484004D0AC4 /* carolineUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = carolineUITests.swift; sourceTree = "<group>"; };
 		F8D4769E2E504484004D0AC4 /* carolineUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = carolineUITestsLaunchTests.swift; sourceTree = "<group>"; };
 		F8D476AB2E50452F004D0AC4 /* Config.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Config.swift; sourceTree = "<group>"; };
+		F8D476B32E51F30A004D0AC4 /* genericUI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = genericUI.swift; sourceTree = "<group>"; };
+		F8D476B52E51F3D9004D0AC4 /* availabilityUI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = availabilityUI.swift; sourceTree = "<group>"; };
+		F8D476B72E51F426004D0AC4 /* gigDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = gigDetailView.swift; sourceTree = "<group>"; };
+		F8D476BA2E521199004D0AC4 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		F8D476BC2E5211C5004D0AC4 /* APIclient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIclient.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -98,8 +108,8 @@
 			isa = PBXGroup;
 			children = (
 				F8D476802E504482004D0AC4 /* carolineApp.swift */,
-				F8D476822E504482004D0AC4 /* ContentView.swift */,
-				F8D476AB2E50452F004D0AC4 /* Config.swift */,
+				F8D476B92E51F43E004D0AC4 /* Views */,
+				F8D476BE2E5211D2004D0AC4 /* Model */,
 				F8D476842E504484004D0AC4 /* Assets.xcassets */,
 				F8D476892E504484004D0AC4 /* caroline.entitlements */,
 				F8D476862E504484004D0AC4 /* Preview Content */,
@@ -130,6 +140,27 @@
 				F8D4769E2E504484004D0AC4 /* carolineUITestsLaunchTests.swift */,
 			);
 			path = carolineUITests;
+			sourceTree = "<group>";
+		};
+		F8D476B92E51F43E004D0AC4 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				F8D476822E504482004D0AC4 /* ContentView.swift */,
+				F8D476B72E51F426004D0AC4 /* gigDetailView.swift */,
+				F8D476B32E51F30A004D0AC4 /* genericUI.swift */,
+				F8D476B52E51F3D9004D0AC4 /* availabilityUI.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		F8D476BE2E5211D2004D0AC4 /* Model */ = {
+			isa = PBXGroup;
+			children = (
+				F8D476AB2E50452F004D0AC4 /* Config.swift */,
+				F8D476BC2E5211C5004D0AC4 /* APIclient.swift */,
+				F8D476BA2E521199004D0AC4 /* AppState.swift */,
+			);
+			path = Model;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -263,7 +294,12 @@
 			buildActionMask = 2147483647;
 			files = (
 				F8D476832E504482004D0AC4 /* ContentView.swift in Sources */,
+				F8D476B42E51F30A004D0AC4 /* genericUI.swift in Sources */,
+				F8D476BB2E521199004D0AC4 /* AppState.swift in Sources */,
+				F8D476BD2E5211C5004D0AC4 /* APIclient.swift in Sources */,
 				F8D476812E504482004D0AC4 /* carolineApp.swift in Sources */,
+				F8D476B82E51F426004D0AC4 /* gigDetailView.swift in Sources */,
+				F8D476B62E51F3D9004D0AC4 /* availabilityUI.swift in Sources */,
 				F8D476AC2E50452F004D0AC4 /* Config.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
