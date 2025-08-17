@@ -15,7 +15,6 @@
 		F8D4769D2E504484004D0AC4 /* carolineUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8D4769C2E504484004D0AC4 /* carolineUITests.swift */; };
 		F8D4769F2E504484004D0AC4 /* carolineUITestsLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8D4769E2E504484004D0AC4 /* carolineUITestsLaunchTests.swift */; };
 		F8D476AC2E50452F004D0AC4 /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8D476AB2E50452F004D0AC4 /* Config.swift */; };
-		F8D476AE2E504572004D0AC4 /* GigDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8D476AD2E504572004D0AC4 /* GigDetailView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -48,7 +47,6 @@
 		F8D4769C2E504484004D0AC4 /* carolineUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = carolineUITests.swift; sourceTree = "<group>"; };
 		F8D4769E2E504484004D0AC4 /* carolineUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = carolineUITestsLaunchTests.swift; sourceTree = "<group>"; };
 		F8D476AB2E50452F004D0AC4 /* Config.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Config.swift; sourceTree = "<group>"; };
-		F8D476AD2E504572004D0AC4 /* GigDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GigDetailView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -102,7 +100,6 @@
 				F8D476802E504482004D0AC4 /* carolineApp.swift */,
 				F8D476822E504482004D0AC4 /* ContentView.swift */,
 				F8D476AB2E50452F004D0AC4 /* Config.swift */,
-				F8D476AD2E504572004D0AC4 /* GigDetailView.swift */,
 				F8D476842E504484004D0AC4 /* Assets.xcassets */,
 				F8D476892E504484004D0AC4 /* caroline.entitlements */,
 				F8D476862E504484004D0AC4 /* Preview Content */,
@@ -268,7 +265,6 @@
 				F8D476832E504482004D0AC4 /* ContentView.swift in Sources */,
 				F8D476812E504482004D0AC4 /* carolineApp.swift in Sources */,
 				F8D476AC2E50452F004D0AC4 /* Config.swift in Sources */,
-				F8D476AE2E504572004D0AC4 /* GigDetailView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
