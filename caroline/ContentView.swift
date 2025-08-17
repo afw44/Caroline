@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var state = AppState(api: APIClient())
+    @State private var confirmDelete: Gig? = nil
 
     // Track which phase groups are expanded
     @State private var expandedPhases: Set<Phase> = [.planning, .booked, .completed]
@@ -87,6 +88,15 @@ struct ContentView: View {
                                             ? Color.accentColor.opacity(0.1)
                                             : Color.clear
                                         )
+                                        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                                            if state.role == .manager {
+                                                Button(role: .destructive) {
+                                                    confirmDelete = gig
+                                                } label: {
+                                                    Label("Delete", systemImage: "trash")
+                                                }
+                                            }
+                                        }
                                     }
                                 } label: {
                                     HStack(spacing: 8) {
@@ -159,6 +169,20 @@ struct ContentView: View {
                 )
             }
         }
+        .alert("Delete gig?", isPresented: Binding(
+            get: { confirmDelete != nil },
+            set: { if !$0 { confirmDelete = nil } }
+        )) {
+            Button("Delete", role: .destructive) {
+                if let g = confirmDelete {
+                    Task { await state.deleteGig(g) }
+                }
+                confirmDelete = nil
+            }
+            Button("Cancel", role: .cancel) { confirmDelete = nil }
+        } message: {
+            Text(confirmDelete.map { "“\($0.title)” will be removed." } ?? "")
+        }
         // iPhone push behavior
         .navigationDestination(item: $state.selectedGig) { gig in
             GigDetailView(
@@ -185,10 +209,6 @@ struct ContentView: View {
     }
 }
 
-
-
-import SwiftUI
-
 struct GigDetailView: View {
     // Input
     var gig: Gig
@@ -198,7 +218,7 @@ struct GigDetailView: View {
     var onSave: (Gig) -> Void
     var onSetPhase: (Phase) -> Void
 
-    // Availability deps
+    // Availability deps (provided by ContentView/AppState)
     var fetchAvailability: (_ gigID: Int) async -> [AvailabilityEntry]
     var setAvailability: (_ gigID: Int, _ gentID: Int, _ status: AvailabilityStatus) async -> Void
     var currentGentID: Int?
@@ -295,7 +315,7 @@ struct GigDetailView: View {
                     }
                 }
 
-                // ===== Notes Card =====
+                // ===== Notes =====
                 Card(header: "Notes") {
                     if isEditing {
                         TextEditor(text: $draft.notes)
@@ -311,31 +331,45 @@ struct GigDetailView: View {
                     }
                 }
 
-                // ===== Availability Card (Planning only) =====
+                // ===== Availability (Planning only) =====
                 if draft.phase == .planning {
                     AvailabilityCard(
                         gigID: draft.id,
                         allGents: allGents,
                         availability: availability,
                         isLoading: isLoadingAvail,
-                        canEditAll: canEdit,
-                        currentGentID: currentGentID,
-                        onPick: { gentID, status in
+                        canEditAll: canEdit,                 // manager can edit all
+                        currentGentID: currentGentID,        // gent can edit own row
+                        onChange: { gentID, newStatus in
+                            // --- OPTIMISTIC UPDATE ---
+                            var dict = availabilityDict
+                            dict[gentID] = newStatus
+                            availability = allGents.map { g in
+                                AvailabilityEntry(gent_id: g.id, status: dict[g.id] ?? .no_reply)
+                            }
+                            // keep assignments chips in sync locally
+                            if newStatus == .assigned {
+                                if !draft.gent_ids.contains(gentID) { draft.gent_ids.append(gentID) }
+                            } else {
+                                draft.gent_ids.removeAll { $0 == gentID }
+                            }
+
                             Task {
-                                await setAvailability(draft.id, gentID, status)
+                                // server call (AppState will refresh gigs)
+                                await setAvailability(draft.id, gentID, newStatus)
+                                // pull the canonical availability back
                                 await reloadAvailability()
                             }
                         }
                     )
                 }
 
-                // ===== Assignments Card (read-only chips in planning; toggle UI otherwise) =====
+                // ===== Assignments =====
                 Card {
                     DisclosureGroup(isExpanded: $showAssignments) {
                         VStack(alignment: .leading, spacing: 8) {
-                            // Supersede checkbox editing in Planning: read-only chips
                             if draft.phase == .planning {
-                                assignedChips
+                                assignedChips // read-only in planning (availability drives assignment)
                             } else {
                                 if isEditing {
                                     ForEach(allGents) { gent in
@@ -347,7 +381,9 @@ struct GigDetailView: View {
                                                 } else {
                                                     draft.gent_ids.removeAll { $0 == gent.id }
                                                 }
-                                            })) { Text(gent.name) }
+                                            })) {
+                                                Text(gent.name)
+                                            }
                                     }
                                 } else {
                                     assignedChips
@@ -390,6 +426,7 @@ struct GigDetailView: View {
                         .keyboardShortcut(.return, modifiers: [.command])
                     }
                 } else {
+                    // Phase quick menu
                     ToolbarItem(placement: .primaryAction) {
                         Menu {
                             ForEach(Phase.allCases) { p in
@@ -399,19 +436,19 @@ struct GigDetailView: View {
                                     Label(p.label, systemImage: p == gig.phase ? "checkmark" : "")
                                 }
                             }
-                        } label: {
-                            Label("Phase", systemImage: "flag")
-                        }
+                        } label: { Label("Phase", systemImage: "flag") }
                     }
-                    ToolbarItem(placement: .automatic) {
-                        Button("Edit") { startEditingNow() }
-                    }
+                    // Separate Edit button
+                    ToolbarItem(placement: .automatic) { Button("Edit") { startEditingNow() } }
                 }
             }
         }
         .onAppear { Task { await reloadAvailabilityIfNeeded() } }
+        .onChange(of: gig) { _, new in
+            // keep local draft synced with source of truth
+            draft = new
+        }
         .onChange(of: gig.id) { _, _ in
-            draft = gig
             feeText = String(gig.fee)
             isEditing = startEditing && canEdit && gig.id == -1
             showAssignments = true
@@ -460,6 +497,10 @@ struct GigDetailView: View {
         }
     }
 
+    private var availabilityDict: [Int: AvailabilityStatus] {
+        Dictionary(uniqueKeysWithValues: availability.map { ($0.gent_id, $0.status) })
+    }
+
     private func reloadAvailabilityIfNeeded() async {
         guard draft.phase == .planning else {
             availability = []
@@ -477,15 +518,20 @@ struct GigDetailView: View {
 }
 
 // MARK: - Availability Card
-
 private struct AvailabilityCard: View {
     let gigID: Int
     let allGents: [Gent]
     let availability: [AvailabilityEntry]
     let isLoading: Bool
+
+    /// Manager can edit all rows (true when role == .manager)
     let canEditAll: Bool
+
+    /// The current gent id if role == .gent, otherwise nil
     let currentGentID: Int?
-    let onPick: (_ gentID: Int, _ status: AvailabilityStatus) -> Void
+
+    /// Called when a row’s status changes (optimistic handled by parent)
+    let onChange: (_ gentID: Int, _ status: AvailabilityStatus) -> Void
 
     var body: some View {
         Card(header: "Availability") {
@@ -493,21 +539,42 @@ private struct AvailabilityCard: View {
                 ProgressView().frame(maxWidth: .infinity, alignment: .center)
             } else {
                 ForEach(allGents) { gent in
-                    let status = availabilityDict[gent.id] ?? .no_reply
-                    let editable = canEditAll || (currentGentID == gent.id)
+                    let status = dict[gent.id] ?? .no_reply
+
+                    // Show thumbs if manager OR (gent mode AND this is me)
+                    let showThumbs = canEditAll || (currentGentID == gent.id)
+                    let thumbsAreEditable = showThumbs   // both manager and the signed-in gent can edit their thumbs
+
+                    // Assign control visible for manager only
+                    let showAssignControl = canEditAll
+
                     AvailabilityRow(
                         gent: gent,
                         status: status,
-                        editable: editable,
-                        canAssign: canEditAll,             // only manager can assign
-                        onPick: { s in onPick(gent.id, s) }
+                        showThumbs: showThumbs,
+                        thumbsEditable: thumbsAreEditable,
+                        showAssignControl: showAssignControl,
+                        onThumbUp: {
+                            if status != .available { onChange(gent.id, .available) }
+                            else { onChange(gent.id, .no_reply) }
+                        },
+                        onThumbDown: {
+                            if status != .unavailable { onChange(gent.id, .unavailable) }
+                            else { onChange(gent.id, .no_reply) }
+                        },
+                        onAssign: {
+                            // Manager tap on circle moves available -> assigned
+                            if status == .available {
+                                onChange(gent.id, .assigned)
+                            }
+                        }
                     )
                 }
             }
         }
     }
 
-    private var availabilityDict: [Int: AvailabilityStatus] {
+    private var dict: [Int: AvailabilityStatus] {
         Dictionary(uniqueKeysWithValues: availability.map { ($0.gent_id, $0.status) })
     }
 }
@@ -515,51 +582,70 @@ private struct AvailabilityCard: View {
 private struct AvailabilityRow: View {
     let gent: Gent
     let status: AvailabilityStatus
-    let editable: Bool
-    let canAssign: Bool
-    let onPick: (AvailabilityStatus) -> Void
+
+    /// Whether thumbs are shown at all (manager OR “me” in gent mode)
+    let showThumbs: Bool
+    /// Whether the thumbs are enabled for tapping
+    let thumbsEditable: Bool
+
+    /// Manager’s assign control visibility
+    let showAssignControl: Bool
+
+    let onThumbUp: () -> Void
+    let onThumbDown: () -> Void
+    let onAssign: () -> Void
 
     var body: some View {
-        HStack {
-            if editable {
-                Menu {
-                    ForEach(options, id: \.self) { s in
-                        Button {
-                            onPick(s)
-                        } label: {
-                            HStack {
-                                Text(s.label)
-                                if s == status { Image(systemName: "checkmark") }
-                            }
-                        }
+        HStack(spacing: 12) {
+
+            // Thumbs (only shown for manager or "me" in gent mode)
+            if showThumbs {
+                HStack(spacing: 8) {
+                    Button(action: onThumbUp) {
+                        Image(systemName: status == .available ? "hand.thumbsup.fill" : "hand.thumbsup")
                     }
-                } label: {
-                    HStack {
-                        Text(gent.name)
-                            .underline() // visual affordance: tappable
-                        Spacer()
-                        AvailabilityTag(status: status)
+                    .buttonStyle(.borderless)
+                    .disabled(!thumbsEditable)
+                    .help("Available")
+
+                    Button(action: onThumbDown) {
+                        Image(systemName: status == .unavailable ? "hand.thumbsdown.fill" : "hand.thumbsdown")
                     }
+                    .buttonStyle(.borderless)
+                    .disabled(!thumbsEditable)
+                    .help("Unavailable")
                 }
-            } else {
-                Text(gent.name)
-                Spacer()
-                AvailabilityTag(status: status)
             }
+
+            // Name
+            Text(gent.name)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            // Assign control (manager only):
+            // - When .available → show a tappable empty circle to assign
+            // - When .assigned  → show a *filled* checkmark that persists (non-tappable)
+            if showAssignControl {
+                if status == .available {
+                    Button(action: onAssign) {
+                        Image(systemName: "circle")            // empty circle before assigning
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Assign")
+                } else if status == .assigned {
+                    Image(systemName: "checkmark.circle.fill") // persists after assigned
+                        .foregroundStyle(.blue)
+                        .help("Assigned")
+                }
+            }
+
+            // Status tag
+            AvailabilityTag(status: status)
         }
         .padding(.vertical, 4)
-    }
-
-    private var options: [AvailabilityStatus] {
-        if canAssign {
-            return [.no_reply, .available, .unavailable, .assigned]
-        } else {
-            return [.no_reply, .available, .unavailable]
-        }
+        .opacity((showThumbs && thumbsEditable) || showAssignControl ? 1.0 : 0.9)
     }
 }
 
-// Tag chip for availability
 private struct AvailabilityTag: View {
     let status: AvailabilityStatus
     var body: some View {
@@ -573,18 +659,18 @@ private struct AvailabilityTag: View {
     }
     private var bg: Color {
         switch status {
-        case .no_reply:   return .gray.opacity(0.18)
-        case .available:  return .green.opacity(0.18)
-        case .unavailable:return .red.opacity(0.18)
-        case .assigned:   return .blue.opacity(0.18)
+        case .no_reply:    return .gray.opacity(0.18)
+        case .available:   return .green.opacity(0.18)
+        case .unavailable: return .red.opacity(0.18)
+        case .assigned:    return .blue.opacity(0.18)
         }
     }
     private var fg: Color {
         switch status {
-        case .no_reply:   return .gray
-        case .available:  return .green
-        case .unavailable:return .red
-        case .assigned:   return .blue
+        case .no_reply:    return .gray
+        case .available:   return .green
+        case .unavailable: return .red
+        case .assigned:    return .blue
         }
     }
 }

@@ -165,6 +165,27 @@ final class APIClient {
         return try JSONDecoder.app.decode(Gig.self, from: data)
     }
 
+    func deleteGig(id: Int) async throws {
+        var comps = URLComponents(url: baseHTTP.appendingPathComponent("gigs/\(id)"), resolvingAgainstBaseURL: false)!
+        comps.queryItems = [URLQueryItem(name: "actor_role", value: "manager")]
+        var req = URLRequest(url: comps.url!)
+        req.httpMethod = "DELETE"
+
+        let (data, resp) = try await session.data(for: req)
+        guard let http = resp as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+
+        switch http.statusCode {
+        case 204, 200, 404:
+            return
+        default:
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw NSError(domain: "APIClient.deleteGig",
+                          code: http.statusCode,
+                          userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode) on DELETE /gigs/\(id). Body: \(body)"])
+        }
+    }
+    
+    
     // MARK: - Helpers
     private static func ensure200(_ response: URLResponse) throws {
         try ensure(response, expected: 200)
@@ -295,6 +316,23 @@ final class AppState: ObservableObject {
         (try? await api.availability(gigID: gigID)) ?? []
     }
 
+    @MainActor
+    func deleteGig(_ gig: Gig) async {
+        do {
+            try await api.deleteGig(id: gig.id)
+        } catch {
+            print("delete error:", error)
+        }
+        do {
+            try await refreshGigs()
+            if selectedGig?.id == gig.id {
+                selectedGig = gigs.first
+            }
+        } catch {
+            print("refresh after delete error:", error)
+        }
+    }
+    
     @MainActor
     func updateAvailability(gigID: Int, gentID: Int, to status: AvailabilityStatus) async {
         do {

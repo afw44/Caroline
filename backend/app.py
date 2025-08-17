@@ -387,12 +387,13 @@ def set_availability(
 @app.delete("/gigs/{gig_id}", status_code=204)
 def delete_gig(
     gig_id: int,
-    actor_role: str = Query(..., pattern="^(manager)$"),
+    actor_role: Optional[str] = Query(default="manager"),
     session: Session = Depends(get_session),
 ):
     gig = session.get(GigORM, gig_id)
     if not gig:
-        raise HTTPException(status_code=404, detail="Gig not found")
+        # Treat as success so the client can just refresh
+        return Response(status_code=204)
     session.delete(gig)
     session.commit()
     return Response(status_code=204)
