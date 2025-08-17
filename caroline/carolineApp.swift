@@ -9,7 +9,7 @@ import SwiftUI
 
 
 @main
-struct GiggleApp: App {
+struct CarolineApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()

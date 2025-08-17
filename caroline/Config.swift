@@ -6,30 +6,81 @@
 //
 
 import Foundation
-import Combine
+import SwiftUI
 
-enum Role: String, CaseIterable, Identifiable { case manager, gent; var id: String { rawValue } }
-
-let CurrentEnv: BackendEnv = .local
-let BASE_HTTP = CurrentEnv.baseHTTP
-let BASE_WS   = CurrentEnv.baseWS
-
-
+// MARK: - Models
 
 struct Gent: Identifiable, Codable, Hashable {
-    let id: Int
-    let name: String
-    let username: String?
+    var id: Int
+    var name: String
+    var username: String?
 }
 
-struct Gig: Identifiable, Codable, Hashable {
-    let id: Int
+struct Gig: Identifiable, Codable, Hashable, Equatable {
+    var id: Int
     var title: String
     var date: Date
     var fee: Double
     var notes: String
+    var phase: Phase        // <- NEW
     var gent_ids: [Int]
 }
+
+// Payload for POST /gigs
+struct NewGig: Codable {
+    var title: String
+    var date: Date
+    var fee: Double
+    var notes: String
+    var phase: Phase        // <- include in payload
+    var gent_ids: [Int]
+}
+
+enum Role: String, CaseIterable, Identifiable {
+    case manager, gent
+    var id: String { rawValue }
+}
+
+enum Phase: String, Codable, CaseIterable, Identifiable {
+    case planning, booked, completed
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .planning:  return "Planning"
+        case .booked:    return "Booked"
+        case .completed: return "Completed"
+        }
+    }
+}
+
+struct AvailabilityEntry: Codable, Hashable, Identifiable {
+    var gent_id: Int
+    var status: AvailabilityStatus
+    var id: Int { gent_id }
+}
+
+private struct AvailabilityUpdatePayload: Codable {
+    var gent_id: Int
+    var status: AvailabilityStatus
+}
+
+enum AvailabilityStatus: String, Codable, CaseIterable, Identifiable {
+    case no_reply, available, unavailable, assigned
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .no_reply:   return "No Reply"
+        case .available:  return "Available"
+        case .unavailable:return "Unavailable"
+        case .assigned:   return "Assigned"
+        }
+    }
+}
+
+let CurrentEnv: BackendEnv = .local
+let BASE_HTTP = CurrentEnv.baseHTTP
+let BASE_WS   = CurrentEnv.baseWS
 
 extension JSONDecoder {
     static var app: JSONDecoder {
@@ -56,15 +107,6 @@ extension JSONEncoder {
         return e
     }
 }
-
-struct NewGig: Codable {
-    var title: String
-    var date: Date
-    var fee: Double
-    var notes: String
-    var gent_ids: [Int]
-}
-
 
 
 final class APIClient {
@@ -136,6 +178,50 @@ final class APIClient {
                           userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode)"])
         }
     }
+    
+    func availability(gigID: Int) async throws -> [AvailabilityEntry] {
+        let url = baseHTTP.appendingPathComponent("gigs/\(gigID)/availability")
+        let (data, resp) = try await session.data(from: url)
+        try Self.ensure200(resp)
+        return try JSONDecoder.app.decode([AvailabilityEntry].self, from: data)
+    }
+    
+    @discardableResult
+    func setAvailability(
+        gigID: Int,
+        gentID: Int,
+        status: AvailabilityStatus,
+        actorRole: Role,
+        actorGentID: Int? = nil
+    ) async throws -> AvailabilityEntry {
+        var comps = URLComponents(url: baseHTTP.appendingPathComponent("gigs/\(gigID)/availability"), resolvingAgainstBaseURL: false)!
+        comps.queryItems = [
+            URLQueryItem(name: "actor_role", value: actorRole.rawValue),
+        ]
+        if actorRole == .gent, let actorGentID {
+            comps.queryItems?.append(URLQueryItem(name: "actor_gent_id", value: String(actorGentID)))
+        }
+
+        var req = URLRequest(url: comps.url!)
+        req.httpMethod = "PUT"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body = AvailabilityUpdatePayload(gent_id: gentID, status: status)
+        req.httpBody = try JSONEncoder.app.encode(body)
+
+        let (data, resp) = try await session.data(for: req)
+        try Self.ensure200(resp)
+        return try JSONDecoder.app.decode(AvailabilityEntry.self, from: data)
+    }
+
+    @discardableResult
+    func setAvailabilityAsGent(gigID: Int, gentID: Int, status: AvailabilityStatus) async throws -> AvailabilityEntry {
+        try await setAvailability(gigID: gigID, gentID: gentID, status: status, actorRole: .gent, actorGentID: gentID)
+    }
+
+    @discardableResult
+    func setAvailabilityAsManager(gigID: Int, gentID: Int, status: AvailabilityStatus) async throws -> AvailabilityEntry {
+        try await setAvailability(gigID: gigID, gentID: gentID, status: status, actorRole: .manager, actorGentID: nil)
+    }
 }
 
 
@@ -162,52 +248,113 @@ enum BackendEnv {
     }
 }
 
+// MARK: - App State
+
 @MainActor
 final class AppState: ObservableObject {
     @Published var role: Role = .gent
     @Published var gents: [Gent] = []
     @Published var selectedGentID: Int? = nil
+
     @Published var gigs: [Gig] = []
     @Published var selectedGig: Gig? = nil
 
-    private let api: APIClient
+    let api: APIClient
     init(api: APIClient) { self.api = api }
 
+    // Initial bootstrap
     func loadInitial() async {
         do {
             gents = try await api.gents()
-            if selectedGentID == nil { selectedGentID = gents.first?.id }
+            if role == .gent, selectedGentID == nil {
+                selectedGentID = gents.first?.id
+            }
             try await refreshGigs()
         } catch { print("loadInitial error:", error) }
     }
 
+    // Always fetch from backend (authoritative)
     func refreshGigs() async throws {
-        // Decide which gent to filter by
         let filterGentID: Int?
         switch role {
-        case .manager: filterGentID = selectedGentID    // nil = all gigs
-        case .gent:    filterGentID = selectedGentID    // until auth exists
+        case .manager: filterGentID = nil          // manager sees all gigs
+        case .gent:    filterGentID = selectedGentID
         }
         let latest = try await api.gigs(gentID: filterGentID)
-        gigs = latest.sorted { $0.date < $1.date }
-        if let sel = selectedGig?.id { selectedGig = gigs.first(where: { $0.id == sel }) }
+        gigs = latest.sorted { ($0.date, $0.title) < ($1.date, $1.title) }
+        // keep selection if possible
+        if let sel = selectedGig?.id {
+            selectedGig = gigs.first(where: { $0.id == sel })
+        } else {
+            selectedGig = gigs.first
+        }
     }
 
-    func createGig(from draft: Gig) async {
+    @MainActor
+    func loadAvailability(for gigID: Int) async -> [AvailabilityEntry] {
+        (try? await api.availability(gigID: gigID)) ?? []
+    }
+
+    @MainActor
+    func updateAvailability(gigID: Int, gentID: Int, to status: AvailabilityStatus) async {
         do {
-            let payload = NewGig(title: draft.title, date: draft.date, fee: draft.fee, notes: draft.notes, gent_ids: draft.gent_ids)
+            switch role {
+            case .manager:
+                _ = try await api.setAvailabilityAsManager(gigID: gigID, gentID: gentID, status: status)
+            case .gent:
+                _ = try await api.setAvailabilityAsGent(gigID: gigID, gentID: gentID, status: status)
+            }
+            try await refreshGigs() // keep assignments in sync after 'assigned'
+        } catch {
+            print("availability update error:", error)
+        }
+    }
+    
+    // Create from an inline draft
+    func createGig(from draft: Gig) async {
+        let payload = NewGig(
+            title: draft.title,
+            date: draft.date,
+            fee: draft.fee,
+            notes: draft.notes,
+            phase: draft.phase,          // <- include
+            gent_ids: draft.gent_ids
+        )
+        do {
             let created = try await api.createGig(payload)
-            try await refreshGigs()                                   // ⬅️ re-fetch
-            selectedGig = gigs.first(where: { $0.id == created.id })  // select new one
+            try await refreshGigs()
+            selectedGig = gigs.first(where: { $0.id == created.id })
         } catch { print("create error:", error) }
     }
 
+    // Save edits to an existing gig
     func saveGig(_ gig: Gig) async {
         do {
-            _ = try await api.updateGig(gig)
-            try await refreshGigs()                                   // ⬅️ re-fetch
+            _ = try await api.updateGig(gig)   // gig already has .phase
+            try await refreshGigs()
             selectedGig = gigs.first(where: { $0.id == gig.id })
         } catch { print("save error:", error) }
     }
+
+    // Convenience for a manager to change just the phase
+    func setPhase(for gigID: Int, to phase: Phase) async {
+        guard var g = gigs.first(where: { $0.id == gigID }) else { return }
+        g.phase = phase
+        await saveGig(g)
+    }
+
+    // Helper to create a new draft gig with sensible defaults
+    func makeDraft(prefill gentID: Int?) -> Gig {
+        Gig(
+            id: -1,
+            title: "New Gig",
+            date: Date(),
+            fee: 0,
+            notes: "",
+            phase: .planning,            // <- default phase
+            gent_ids: gentID.map { [$0] } ?? []
+        )
+    }
 }
+
 
