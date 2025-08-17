@@ -24,24 +24,22 @@ struct GigDetailView: View {
 
 
     // If you also show team here, keep your state for it:
-    @State private var assigned: Set<String> = []
 
+    
+    
     var body: some View {
+        
+        
         Form {
                     Section("Details") {
                         detailsSectionContent
                     }
                 }
                 .navigationTitle("Gig")
-                .task {
-                    if role == .manager, startInEdit, !isEditing {
-                        beginEdit()                 // <— auto-enter edit mode
-                    }
-                    if let g = gig.gents { assigned = Set(g) }
                 
 
             // If you also show “Team”, keep that Section here…
-        }
+        
         .navigationTitle("Gig")
         .toolbar {
             if role == .manager {
@@ -67,14 +65,13 @@ struct GigDetailView: View {
                     .padding(.bottom, 8)
             }
         }
-        .task {
-            if let g = gig.gents { assigned = Set(g) }
-        }
+        
     }
 
     // MARK: - Section content (fixes the builder error)
     @ViewBuilder
     private var detailsSectionContent: some View {
+        
         if role == .manager && isEditing {
             TextField("Date (YYYY-MM-DD)", text: $dateText)
                 .textFieldStyle(.roundedBorder)
@@ -90,6 +87,8 @@ struct GigDetailView: View {
             TextField("Notes", text: $notesText, axis: .vertical)
                         .textFieldStyle(.roundedBorder)
             
+            gent_picker
+            
         } else {
             LabeledContent("Date") { Text(gig.date) }
             LabeledContent("Client") { Text(gig.client_email) }
@@ -98,6 +97,35 @@ struct GigDetailView: View {
         }
     }
 
+    
+    private var gent_picker: some View {
+        
+        List {
+            ForEach(ALL_GENTS, id: \.self) { gent in
+                Button {
+                    toggle(gent)
+                } label: {
+                    HStack(spacing: 12) {
+                        Image(systemName: gig.assigned_ids.contains(gent.id) ? "checkmark.square.fill" : "square")
+                            .imageScale(.large)
+                        Text(gent.name)
+                        Spacer()
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+
+    private func toggle(_ gent: Gent) {
+        if let idx = gig.assigned_ids.firstIndex(of: gent.id) {
+            gig.assigned_ids.remove(at: idx)
+        } else {
+            gig.assigned_ids.append(gent.id)
+        }
+    }
+    
     // MARK: - Edit flow
     private func beginEdit() {
         dateText = gig.date
@@ -120,48 +148,100 @@ struct GigDetailView: View {
     }
 
     
-    
-    private func saveEdits() async {
-        guard canSave else { return }
-        isSaving = true; defer { isSaving = false }
+    @MainActor
+    private func setError(_ message: String) {
+        self.errorMessage = message
+    }
 
-        // Build PATCH payload of changed fields only
-        var payload: [String: Any] = [:]
-        if dateText != gig.date { payload["date"] = dateText }
-        if clientEmail != gig.client_email { payload["client_email"] = clientEmail }
+    private func saveEdits() async {
+
+        var patch = GigPatch()
+
+        if dateText != gig.date { patch.date = dateText }
+        if clientEmail != gig.client_email { patch.client_email = clientEmail }
+
         if let feeDec = Decimal(string: feePounds) {
-            let newCents = NSDecimalNumber(decimal: feeDec * 100).intValue
-            if newCents != gig.fee { payload["fee"] = newCents }
+            let cents = NSDecimalNumber(decimal: feeDec * 100).intValue
+            if cents != gig.fee { patch.fee = cents }
         }
-        
-        if notesText != (gig.notes ?? "") { payload["notes"] = notesText }
+
+        if notesText != (gig.notes ?? "") {
+            patch.notes = notesText
+        }
+
+        // Include assigned_ids only if changed (compare as Sets to ignore ordering)
+        patch.assigned_ids = gig.assigned_ids
+    
 
         // Nothing changed?
-        if payload.isEmpty { isEditing = false; return }
+        if patch.date == nil,
+           patch.client_email == nil,
+           patch.fee == nil,
+           patch.notes == nil,
+           patch.assigned_ids == nil
+        {
+            isEditing = false
+            return
+        }
 
-        guard let url = URL(string: "\(BASE_HTTP)/gigs/\(gig.id)") else { return }
+        guard let url = URL(string: "\(BASE_HTTP)/gigs/\(gig.id)") else {
+            await setError("Invalid URL.")
+            return
+        }
+
         var req = URLRequest(url: url)
         req.httpMethod = "PATCH"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONSerialization.data(withJSONObject: payload, options: [])
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
 
         do {
+            let encoder = JSONEncoder()            // keep snake_case keys as-is
+            req.httpBody = try encoder.encode(patch)
+
             let (data, resp) = try await URLSession.shared.data(for: req)
-            if let http = resp as? HTTPURLResponse, http.statusCode >= 400 {
-                throw URLError(.badServerResponse)
+            guard let http = resp as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+
+            #if DEBUG
+            print("PATCH status:", http.statusCode)
+            print("PATCH body:", String(data: data, encoding: .utf8) ?? "<non-UTF8 or empty>")
+            #endif
+
+            guard (200..<300).contains(http.statusCode) else { throw URLError(.badServerResponse) }
+
+            // If server ever returns 204 or an empty body, just end cleanly.
+            if data.isEmpty {
+                await MainActor.run {
+                    self.isEditing = false
+                    self.errorMessage = nil
+                    self.onSaved?()
+                }
+                return
             }
-            // Update local gig from server response
+
             let updated = try JSONDecoder().decode(Gig.self, from: data)
+            
+            
             await MainActor.run {
                 self.gig = updated
                 self.isEditing = false
                 self.errorMessage = nil
-                self.onSaved?()      // ask parent to refresh list, if provided
+                self.onSaved?()  // e.g. ask parent to refresh list if needed
             }
+        } catch let encErr as EncodingError {
+            await setError("Couldn’t prepare request (encoding error).")
+            #if DEBUG
+            print("EncodingError:", encErr)
+            #endif
+        } catch let decErr as DecodingError {
+            await setError("Saved, but couldn’t read server response.")
+            #if DEBUG
+            print("DecodingError:", decErr, String(data: (try? JSONEncoder().encode(patch)) ?? Data(), encoding: .utf8) ?? "")
+            #endif
         } catch {
-            await MainActor.run {
-                self.errorMessage = "Couldn’t save changes. Check fields and try again."
-            }
+            await setError("Couldn’t save changes. Check fields and try again.")
+            #if DEBUG
+            print("Save error:", error)
+            #endif
         }
     }
 
@@ -174,6 +254,15 @@ struct GigDetailView: View {
         return f.string(from: NSNumber(value: pounds)) ?? "£\(pounds)"
     }
 }
+
+struct GigPatch: Encodable {
+    var date: String?
+    var client_email: String?
+    var fee: Int?
+    var notes: String?
+    var assigned_ids: [Int]?
+}
+
 
 /// Simple wrapping HStack for tags
 struct WrapHStack<Content: View>: View {

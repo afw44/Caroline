@@ -54,7 +54,7 @@ GENTS: List[str] = ["gent-1", "gent-2", "gent-3", "gent-4", "gent-5"]
 gigs: Dict[str, Dict[str, Any]] = {}
 
 # assignments: gig_id -> set(gent-ids)
-gig_assignments: Dict[str, Set[str]] = {}
+gig_assignments: Dict[str, Set[int]] = {}
 
 _email_rx = re.compile(r"^[^@]+@[^@]+\.[^@]+$")
 
@@ -66,38 +66,44 @@ def ensure_gig(gig_id: str) -> Dict[str, Any]:
 
 @app.post("/gigs", status_code=201)
 def create_gig(
+    assigned_ids: Set[int] = Body(set(), embed=True),
     date: str = Body(..., embed=True),
     client_email: str = Body(..., embed=True),
     fee: int = Body(..., embed=True),
-    notes: str = Body("", embed=True),   # ← default empty
+    notes: str = Body("", embed=True)
 ):
     if not _email_rx.match(client_email):
         raise HTTPException(status_code=400, detail="invalid email")
     gid = str(uuid4())
     gigs[gid] = {
         "id": gid, "date": date, "client_email": client_email,
-        "fee": fee, "notes": notes
+        "fee": fee, "notes": notes, "assigned_ids": set(assigned_ids)
     }
-    gig_assignments[gid] = set()
-    return gigs[gid]
-
+    gig_assignments[gid] = set(assigned_ids)   # ← keep what client sent
+    return JSONResponse(content={**gigs[gid], "assigned_ids": sorted(list(assigned_ids))}, status_code=201)
+    
+    
 @app.get("/gigs")
 def list_gigs():
-    out: List[Dict[str, Any]] = []
+    out = []
     for gid, g in gigs.items():
-        out.append({**g, "gents": sorted(list(gig_assignments.get(gid, set())))})
+        ids = g.get("assigned_ids", set())
+        out.append({**g, "assigned_ids": sorted(list(ids))})
     return {"gigs": out}
+from fastapi.responses import JSONResponse
+import asyncio
 
-# update_gig
 @app.patch("/gigs/{gig_id}")
-def update_gig(
+async def update_gig(
     gig_id: str,
     date: Optional[str] = Body(None, embed=True),
     client_email: Optional[str] = Body(None, embed=True),
     fee: Optional[int] = Body(None, embed=True),
-    notes: Optional[str] = Body(None, embed=True),   # ← accept notes
+    notes: Optional[str] = Body(None, embed=True),
+    assigned_ids: Optional[Set[int]] = Body(None, embed=True),
 ):
     g = ensure_gig(gig_id)
+
     if date is not None:
         g["date"] = date
     if client_email is not None:
@@ -106,30 +112,28 @@ def update_gig(
         g["client_email"] = client_email
     if fee is not None:
         g["fee"] = fee
-    if notes is not None:              # ← update notes
+    if notes is not None:
         g["notes"] = notes
-    for gent in gig_assignments.get(gig_id, set()):
-        asyncio.create_task(send_to_user(gent, {"type": "gigs_changed"}))
-    return g
-@app.post("/gigs/{gig_id}/assign")
-async def assign_gent(
-    gig_id: str,
-    gent_id: str = Body(..., embed=True),
-    assigned: bool = Body(..., embed=True),
-):
-    if gent_id not in GENTS:
-        raise HTTPException(status_code=404, detail="unknown gent id")
-    _ = ensure_gig(gig_id)
-    s = gig_assignments.setdefault(gig_id, set())
-    before = gent_id in s
-    if assigned:
-        s.add(gent_id)
-    else:
-        s.discard(gent_id)
-    changed = (before != assigned)
-    if changed:
-        await send_to_user(gent_id, {"type": "gigs_changed"})
-    return {"id": gig_id, "gents": sorted(list(s))}
+    if assigned_ids is not None:
+        g["assigned_ids"] = set(assigned_ids)
+        gig_assignments[gig_id] = set(assigned_ids)
+
+        # kick notifications on the running loop
+        tasks = []
+        for gent_idx in assigned_ids:
+            if 0 <= gent_idx < len(GENTS):
+                gent_user_id = GENTS[gent_idx]
+                tasks.append(asyncio.create_task(
+                    send_to_user(gent_user_id, {"type": "gigs_changed"})
+                ))
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    # normalize response: assigned_ids as a list
+    ids = g.get("assigned_ids", set())
+    payload = {**g, "assigned_ids": sorted(list(ids))}
+    return JSONResponse(content=payload, status_code=200)
+    
 
 @app.get("/manager/gigs")
 def manager_gigs():
@@ -139,11 +143,13 @@ def manager_gigs():
 def gigs_for_gent(gent_id: str):
     if gent_id not in GENTS:
         raise HTTPException(status_code=404, detail="unknown gent id")
+    gent_idx = GENTS.index(gent_id)  # map string -> index
+
     result: List[Dict[str, Any]] = []
     for gid, g in gigs.items():
-        if gent_id in gig_assignments.get(gid, set()):
+        ids = g.get("assigned_ids", set())
+        if gent_idx in ids:
             result.append(g)
-    # sort by date then id for stable output
     result.sort(key=lambda x: (x.get("date", ""), x["id"]))
     return {"gigs": result}
 

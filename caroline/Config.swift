@@ -8,8 +8,6 @@
 import Foundation
 import Combine
 
-let ALL_GENTS: [String] = ["gent-1", "gent-2", "gent-3", "gent-4", "gent-5"]
-
 let CurrentEnv: BackendEnv = .local
 let BASE_HTTP = CurrentEnv.baseHTTP
 let BASE_WS   = CurrentEnv.baseWS
@@ -55,14 +53,48 @@ enum Tool: Hashable {
     case availability
 }
 
+
 struct Gig: Identifiable, Codable, Hashable {
     let id: String
     var date: String
     var client_email: String
-    var fee: Int                // cents (backend uses int)
-    var gents: [String]?        // only present on manager endpoints
+    var fee: Int                 // cents
+    var assigned_ids: [Int]      // may be absent on some endpoints
     var notes: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, date, client_email, fee, assigned_ids, notes
+    }
+
+    init(id: String, date: String, client_email: String, fee: Int, assigned_ids: [Int] = [], notes: String? = nil) {
+        self.id = id
+        self.date = date
+        self.client_email = client_email
+        self.fee = fee
+        self.assigned_ids = assigned_ids
+        self.notes = notes
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        date = try c.decode(String.self, forKey: .date)
+        client_email = try c.decode(String.self, forKey: .client_email)
+        fee = try c.decode(Int.self, forKey: .fee)
+        // Default to [] if missing
+        assigned_ids = try c.decodeIfPresent([Int].self, forKey: .assigned_ids) ?? []
+        notes = try c.decodeIfPresent(String.self, forKey: .notes)
+    }
 }
+
+struct Gent: Identifiable, Hashable {
+    var id : Int
+    var name: String
+}
+
+let ALL_GENTS: [Gent] = [Gent(id: 0, name: "Alice"), 
+                         Gent(id: 1, name: "Bob")]
+
 
 
 final class Realtime: ObservableObject {

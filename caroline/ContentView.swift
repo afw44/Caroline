@@ -93,7 +93,8 @@ struct ContentView: View {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
         struct CreateReq: Codable { let date: String; let client_email: String; let fee: Int }
         let payload = CreateReq(date: f.string(from: Date()), client_email: "new@example.com", fee: 0)
-
+        
+        
         guard let url = URL(string: "\(BASE_HTTP)/gigs") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -223,6 +224,7 @@ struct GigsToolView: View {
                 let (data, _) = try await URLSession.shared.data(from: url)
                 let decoded = try JSONDecoder().decode(Resp.self, from: data)
                 await MainActor.run { gigs = decoded.gigs }
+                
             } else {
                 let gentId = "gent-\(selectedGent)"
                 guard let url = URL(string: "\(BASE_HTTP)/gent/\(gentId)/gigs") else { return }
@@ -239,7 +241,7 @@ struct GigsToolView: View {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
         struct CreateReq: Codable { let date: String; let client_email: String; let fee: Int }
         let payload = CreateReq(date: f.string(from: Date()), client_email: "new@example.com", fee: 0)
-
+        
         guard let url = URL(string: "\(BASE_HTTP)/gigs") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -295,3 +297,5 @@ struct AvailabilityToolView: View {
         .padding()
     }
 }
+
+
