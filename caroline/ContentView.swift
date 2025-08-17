@@ -1,605 +1,329 @@
 import SwiftUI
 
+import SwiftUI
+
 struct ContentView: View {
-    // Sidebar state
-    @State private var section: AppSection = .manager
-    @State private var tool: Tool = .gigs
-    @State private var selectedGent = 1
+    @StateObject private var state = AppState(api: APIClient())
 
-    // Data for gigs
-    @State private var managerGigs: [Gig] = []
-    @State private var gentGigs: [Gig] = []
-    @State private var selection: Gig?
-    @State private var justCreatedGigId: String?
-
-    // Realtime (gent)
-    @StateObject private var rt = Realtime()
+    private func newDraftGig(prefill gentID: Int?) -> Gig {
+        Gig(id: -1, title: "New Gig", date: Date(), fee: 0, notes: "", gent_ids: gentID.map { [$0] } ?? [])
+    }
 
     var body: some View {
-        // Outer split view: sidebar + main content
         NavigationSplitView {
-            SidebarView(
-                section: $section,
-                tool: $tool,
-                selectedGent: $selectedGent,
-                forceRefresh: {
-                    if tool == .gigs {
-                        if section == .manager { Task { await refreshManager() } }
-                        else { Task { await refreshGent() } }
+            // ========== SIDEBAR ==========
+            List {
+                Section("Role") {
+                    Picker("Role", selection: $state.role) {
+                        ForEach(Role.allCases) { r in
+                            Text(r.rawValue.capitalized).tag(r)
+                        }
                     }
-                },
-                connectedGentId: rt.connectedGentId
-            )
-            .frame(minWidth: 240)
+                    .pickerStyle(.segmented)
+                }
+
+                // Picker shows when *Gent* is the role
+                if state.role == .gent {
+                    Section("I am…") {
+                        Picker("Gent", selection: Binding(
+                            get: { state.selectedGentID ?? -1 },
+                            set: { newValue in
+                                state.selectedGentID = (newValue == -1) ? nil : newValue
+                                Task { try? await state.refreshGigs() }
+                            }
+                        )) {
+                            ForEach(state.gents) { g in
+                                Text(g.name).tag(g.id)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Giggle")
+            .onChange(of: state.role) { _, _ in
+                if state.role == .gent, state.selectedGentID == nil {
+                    state.selectedGentID = state.gents.first?.id
+                }
+                Task { try? await state.refreshGigs() }
+            }
+            .task { await state.loadInitial() }
+
+        } content: {
+            // ========== MIDDLE LIST (button rows driving selection) ==========
+            List {
+                ForEach(state.gigs) { gig in
+                    Button {
+                        state.selectedGig = gig
+                    } label: {
+                        VStack(alignment: .leading) {
+                            Text(gig.title).font(.headline)
+                            HStack {
+                                Text(gig.date.formatted(date: .abbreviated, time: .omitted))
+                                Spacer()
+                                Text(gig.fee, format: .currency(code: Locale.current.currency?.identifier ?? "USD"))
+                            }
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain) // so it looks like a row
+                    .listRowBackground(
+                        (state.selectedGig?.id == gig.id)
+                        ? Color.accentColor.opacity(0.12)
+                        : Color.clear
+                    )
+                }
+            }
+            .refreshable { try? await state.refreshGigs() }
+            .toolbar {
+                if state.role == .manager {
+                    Button {
+                        state.selectedGig = newDraftGig(prefill: state.selectedGentID)
+                    } label: {
+                        Label("Add Gig", systemImage: "plus")
+                    }
+                }
+            }
+            .navigationTitle("Gigs")
 
         } detail: {
-            switch tool {
-            case .gigs:
-                GigsToolView(role: section == .manager ? .manager : .gent,
-                             selectedGent: $selectedGent,
-                             rt: rt)
-                
-            case .calendar:
-                DummyView(role: section == .manager ? .manager : .gent)
-
-            case .accounting:
-                DummyView(role: section == .manager ? .manager : .gent)
-
-            case .availability:
-                DummyView(role: section == .manager ? .manager : .gent)
-            }
-        }
-    }
-
-    // MARK: - Helpers
-
-
-    private func refreshManager() async {
-        guard let url = URL(string: "\(BASE_HTTP)/manager/gigs") else { return }
-        struct Resp: Codable { let gigs: [Gig] }
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            let decoded = try JSONDecoder().decode(Resp.self, from: data)
-            await MainActor.run {
-                managerGigs = decoded.gigs
-                if let sel = selection, !managerGigs.contains(sel) { selection = nil }
-            }
-        } catch { /* ignore for demo */ }
-    }
-
-    private func refreshGent() async {
-        let gentId = "gent-\(selectedGent)"
-        guard let url = URL(string: "\(BASE_HTTP)/gent/\(gentId)/gigs") else { return }
-        struct Resp: Codable { let gigs: [Gig] }
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            let decoded = try JSONDecoder().decode(Resp.self, from: data)
-            await MainActor.run {
-                gentGigs = decoded.gigs
-                if let sel = selection, !gentGigs.contains(sel) { selection = nil }
-            }
-        } catch { /* ignore for demo */ }
-    }
-
-    private func connectGentWS() {
-        rt.onGigsChanged = { Task { await refreshGent() } }
-        rt.connect(as: "gent-\(selectedGent)")
-    }
-
-    private func createNewGigAndEdit() async {
-        // Backend requires date/email/fee; seed minimal valid gig.
-        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
-        struct CreateReq: Codable { let date: String; let client_email: String; let fee: Int }
-        let payload = CreateReq(date: f.string(from: Date()), client_email: "new@example.com", fee: 0)
-        
-        
-        guard let url = URL(string: "\(BASE_HTTP)/gigs") else { return }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONEncoder().encode(payload)
-
-        do {
-            let (data, resp) = try await URLSession.shared.data(for: req)
-            guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return }
-            let newGig = try JSONDecoder().decode(Gig.self, from: data)
-            await MainActor.run {
-                managerGigs.insert(newGig, at: 0)
-                selection = newGig
-                justCreatedGigId = newGig.id
-            }
-        } catch { /* ignore for demo */ }
-    }
-}
-
-struct SidebarView: View {
-    @Binding var section: AppSection
-    @Binding var tool: Tool
-    @Binding var selectedGent: Int
-    var forceRefresh: () -> Void
-    var connectedGentId: String?
-
-    var body: some View {
-        List {
-            Section("Mode") {
-                Picker("Mode", selection: $section) {
-                    Text("Manager").tag(AppSection.manager)
-                    Text("Gents").tag(AppSection.gent)
-                }
-                .pickerStyle(.segmented)
-            }
-
-            Section("Tool") {
-                Picker("Tool", selection: $tool) {
-                    Text("Gigs").tag(Tool.gigs)
-                    Text("Calendar").tag(Tool.calendar)
-                    if section == .manager {
-                        Text("Accounting").tag(Tool.accounting)
+            // ========== DETAIL (inline editor) ==========
+            if let gig = state.selectedGig {
+                GigDetailView(
+                    gig: gig,
+                    allGents: state.gents,
+                    canEdit: state.role == .manager,
+                    startEditing: gig.id == -1,
+                    onSave: { updated in
+                        Task {
+                            if updated.id == -1 {
+                                await state.createGig(from: updated)  // POST
+                            } else {
+                                await state.saveGig(updated)          // PUT
+                            }
+                        }
                     }
-                    Text("Availability").tag(Tool.availability)
-                }
-                .pickerStyle(.menu)
-            }
-
-            if section == .gent {
-                Section("Gent") {
-                    Picker("Logged in as", selection: $selectedGent) {
-                        ForEach(1...5, id: \.self) { i in Text("gent-\(i)").tag(i) }
-                    }
-                    .pickerStyle(.menu)
-
-                    Button("Force Refresh", action: forceRefresh)
-
-                    if let gid = connectedGentId {
-                        Text("Connected as \(gid)")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
-        .listStyle(.sidebar)
-    }
-}
-
-struct GigsToolView: View {
-    let role: UserRole                 // .manager or .gent
-    @Binding var selectedGent: Int     // used when role == .gent
-    @ObservedObject var rt: Realtime
-
-    @State private var gigs: [Gig] = []
-    @State private var selection: Gig?
-    @State private var justCreatedGigId: String?
-
-    var body: some View {
-        NavigationStack {
-            List(gigs) { g in
-                NavigationLink(value: g) { GigRow(gig: g) }
-            }
-            .navigationTitle(role == .manager ? "Manager • Gigs" : "Gents • Gigs")
-            .toolbar {
-                if role == .manager {
-                    ToolbarItem(placement: .primaryAction) {
-                        Button {
-                            Task { await createNewGigAndEdit() }
-                        } label: { Label("New Gig", systemImage: "plus") }
-                    }
-                } else {
-                    ToolbarItem(placement: .status) {
-                        Text("gent-\(selectedGent)").foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .navigationDestination(for: Gig.self) { g in
-                GigDetailView(role: role,
-                              gig: g,
-                              onSaved: role == .manager ? { Task { await refresh() } } : nil,
-                              startInEdit: (role == .manager && g.id == justCreatedGigId))
-            }
-            .task { await refresh() }
-            .onAppear {
-                if role == .gent {
-                    rt.onGigsChanged = { Task { await refresh() } }
-                    rt.connect(as: "gent-\(selectedGent)")
-                }
-            }
-            .onChange(of: selectedGent) { _ in
-                if role == .gent {
-                    rt.onGigsChanged = { Task { await refresh() } }
-                    rt.connect(as: "gent-\(selectedGent)")
-                    Task { await refresh() }
-                }
-            }
-        }
-    }
-
-    // MARK: - Networking
-    private func refresh() async {
-        do {
-            if role == .manager {
-                guard let url = URL(string: "\(BASE_HTTP)/manager/gigs") else { return }
-                struct Resp: Codable { let gigs: [Gig] }
-                let (data, _) = try await URLSession.shared.data(from: url)
-                let decoded = try JSONDecoder().decode(Resp.self, from: data)
-                await MainActor.run { gigs = decoded.gigs }
-                
+                )
             } else {
-                let gentId = "gent-\(selectedGent)"
-                guard let url = URL(string: "\(BASE_HTTP)/gent/\(gentId)/gigs") else { return }
-                struct Resp: Codable { let gigs: [Gig] }
-                let (data, _) = try await URLSession.shared.data(from: url)
-                let decoded = try JSONDecoder().decode(Resp.self, from: data)
-                await MainActor.run { gigs = decoded.gigs }
+                ContentUnavailableView(
+                    "Select a Gig",
+                    systemImage: "music.mic",
+                    description: Text("Pick a gig from the list")
+                )
             }
-        } catch { /* ignore for demo */ }
-    }
-
-    private func createNewGigAndEdit() async {
-        // Backend requires date/email/fee. Seed minimal valid gig.
-        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
-        struct CreateReq: Codable { let date: String; let client_email: String; let fee: Int }
-        let payload = CreateReq(date: f.string(from: Date()), client_email: "new@example.com", fee: 0)
-        
-        guard let url = URL(string: "\(BASE_HTTP)/gigs") else { return }
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.httpBody = try? JSONEncoder().encode(payload)
-
-        do {
-            let (data, resp) = try await URLSession.shared.data(for: req)
-            guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return }
-            let newGig = try JSONDecoder().decode(Gig.self, from: data)
-            await MainActor.run {
-                gigs.insert(newGig, at: 0)
-                justCreatedGigId = newGig.id
-                selection = newGig   // so NavigationStack pushes detail
-            }
-        } catch { /* ignore for demo */ }
-    }
-
-    
-}
-
-struct DummyView: View {
-    let role: UserRole
-    var body: some View {
-        VStack(spacing: 12) {
-            Text(role == .manager ? "Manager • Calendar" : "Gents • Calendar").font(.title2)
-            Text("Calendar UI goes here.")
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding()
     }
 }
-
-
-
-
 
 struct GigDetailView: View {
-    let role: UserRole
-    @State var gig: Gig
-    var onSaved: (() -> Void)? = nil
+    // Passed from parent (do NOT @State)
+    var gig: Gig
 
-    // --- Edit mode state (manager only) ---
-    @State private var isEditing = false
-    @State private var dateText = ""
-    @State private var clientEmail = ""
-    @State private var feePounds = ""
-    @State private var notesText = "my car is too far"
-    @State private var isSaving = false
-    @State private var errorMessage: String?
-    var startInEdit: Bool = false          // <—
+    let allGents: [Gent]
+    let canEdit: Bool
+    var startEditing: Bool = false
+    var onSave: (Gig) -> Void
 
+    // Local editing state
+    @State private var isEditing: Bool = false
+    @State private var draft: Gig
+    @State private var feeText: String = ""
+    @State private var showAssignments: Bool = false   // dropdown (DisclosureGroup)
 
-    // If you also show team here, keep your state for it:
+    init(
+        gig: Gig,
+        allGents: [Gent],
+        canEdit: Bool,
+        startEditing: Bool = false,
+        onSave: @escaping (Gig) -> Void
+    ) {
+        self.gig = gig
+        self.allGents = allGents
+        self.canEdit = canEdit
+        self.startEditing = startEditing
+        self.onSave = onSave
+        _draft = State(initialValue: gig)
+        _isEditing = State(initialValue: startEditing && canEdit)
+        _feeText = State(initialValue: String(gig.fee))
+    }
 
-    
-    
     var body: some View {
-        
-        
-        Form {
-                    Section("Details") {
-                        detailsSectionContent
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                // ===== Title + Primary Info (Card) =====
+                Card {
+                    VStack(alignment: .leading, spacing: 12) {
+                        if isEditing {
+                            TextField("Title", text: $draft.title)
+                                .textFieldStyle(.roundedBorder)
+                                .font(.title2.weight(.semibold))
+                        } else {
+                            Text(draft.title.isEmpty ? "Untitled Gig" : draft.title)
+                                .font(.title2.weight(.semibold))
+                        }
+
+                        HStack(spacing: 16) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Date").font(.caption).foregroundStyle(.secondary)
+                                if isEditing {
+                                    DatePicker("", selection: $draft.date, displayedComponents: [.date])
+                                        .labelsHidden()
+                                } else {
+                                    Text(draft.date.formatted(date: .long, time: .omitted))
+                                }
+                            }
+
+                            Divider().frame(height: 32)
+
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Fee").font(.caption).foregroundStyle(.secondary)
+                                if isEditing {
+                                    TextField("0", text: $feeText)
+                                        .textFieldStyle(.roundedBorder)
+                                        #if os(iOS)
+                                        .keyboardType(.decimalPad)
+                                        #endif
+                                } else {
+                                    Text(draft.fee.formatted(.currency(code: Locale.current.currency?.identifier ?? "USD")))
+                                }
+                            }
+                        }
                     }
                 }
-                .navigationTitle("Gig")
-                
 
-            // If you also show “Team”, keep that Section here…
-        
-        .navigationTitle("Gig")
-        .toolbar {
-            if role == .manager {
-                ToolbarItem(placement: .primaryAction) {
+                // ===== Notes (Headed Text Box / Card) =====
+                Card(header: "Notes") {
                     if isEditing {
-                        HStack(spacing: 8) {
-                            Button("Cancel") { cancelEdit() }
-                            Button("Save")   { Task { await saveEdits() } }
-                                .disabled(!canSave)
-                        }
+                        TextEditor(text: $draft.notes)
+                            .frame(minHeight: 140)
+                            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.secondary.opacity(0.2)))
+                            .clipShape(RoundedRectangle(cornerRadius: 8))
                     } else {
-                        Button("Edit") { beginEdit() }
-                    }
-                }
-            }
-        }
-        .overlay(alignment: .bottom) {
-            if let msg = errorMessage {
-                Text(msg)
-                    .padding(8)
-                    .background(.thinMaterial)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                    .padding(.bottom, 8)
-            }
-        }
-        
-    }
-
-    // MARK: - Section content (fixes the builder error)
-    @ViewBuilder
-    private var detailsSectionContent: some View {
-        
-        if role == .manager && isEditing {
-            TextField("Date (YYYY-MM-DD)", text: $dateText)
-                .textFieldStyle(.roundedBorder)
-                .font(.body.monospacedDigit())
-
-            TextField("Client Email", text: $clientEmail)
-                .textFieldStyle(.roundedBorder)
-                .autocorrectionDisabled()
-
-            TextField("Fee (GBP)", text: $feePounds)
-                .textFieldStyle(.roundedBorder)
-            
-            TextField("Notes", text: $notesText, axis: .vertical)
-                        .textFieldStyle(.roundedBorder)
-            
-            gent_picker
-            
-        } else {
-            LabeledContent("Date") { Text(gig.date) }
-            LabeledContent("Client") { Text(gig.client_email) }
-            LabeledContent("Fee") { Text(formatCurrencyCents(gig.fee)).monospaced() }
-            LabeledContent("Notes") { Text(gig.notes?.isEmpty == false ? (gig.notes ?? "") : "—") }
-        }
-    }
-
-    
-    private var gent_picker: some View {
-        
-        List {
-            ForEach(ALL_GENTS, id: \.self) { gent in
-                Button {
-                    toggle(gent)
-                } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: gig.assigned_ids.contains(gent.id) ? "checkmark.square.fill" : "square")
-                            .imageScale(.large)
-                        Text(gent.name)
-                        Spacer()
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-    }
-
-    private func toggle(_ gent: Gent) {
-        if let idx = gig.assigned_ids.firstIndex(of: gent.id) {
-            gig.assigned_ids.remove(at: idx)
-        } else {
-            gig.assigned_ids.append(gent.id)
-        }
-    }
-    
-    // MARK: - Edit flow
-    private func beginEdit() {
-        dateText = gig.date
-        clientEmail = gig.client_email
-        feePounds = String(format: "%.2f", Double(gig.fee) / 100.0)
-        notesText = gig.notes ?? ""     // ← seed
-        errorMessage = nil
-        isEditing = true
-    }
-
-    private func cancelEdit() {
-        isEditing = false
-        errorMessage = nil
-    }
-
-    private var canSave: Bool {
-        !dateText.trimmingCharacters(in: .whitespaces).isEmpty &&
-        !clientEmail.trimmingCharacters(in: .whitespaces).isEmpty &&
-        (Decimal(string: feePounds) != nil)
-    }
-
-    
-    @MainActor
-    private func setError(_ message: String) {
-        self.errorMessage = message
-    }
-
-    private func saveEdits() async {
-
-        var patch = GigPatch()
-
-        if dateText != gig.date { patch.date = dateText }
-        if clientEmail != gig.client_email { patch.client_email = clientEmail }
-
-        if let feeDec = Decimal(string: feePounds) {
-            let cents = NSDecimalNumber(decimal: feeDec * 100).intValue
-            if cents != gig.fee { patch.fee = cents }
-        }
-
-        if notesText != (gig.notes ?? "") {
-            patch.notes = notesText
-        }
-
-        // Include assigned_ids only if changed (compare as Sets to ignore ordering)
-        patch.assigned_ids = gig.assigned_ids
-    
-
-        // Nothing changed?
-        if patch.date == nil,
-           patch.client_email == nil,
-           patch.fee == nil,
-           patch.notes == nil,
-           patch.assigned_ids == nil
-        {
-            isEditing = false
-            return
-        }
-
-        guard let url = URL(string: "\(BASE_HTTP)/gigs/\(gig.id)") else {
-            await setError("Invalid URL.")
-            return
-        }
-
-        var req = URLRequest(url: url)
-        req.httpMethod = "PATCH"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("application/json", forHTTPHeaderField: "Accept")
-
-        do {
-            let encoder = JSONEncoder()            // keep snake_case keys as-is
-            req.httpBody = try encoder.encode(patch)
-
-            let (data, resp) = try await URLSession.shared.data(for: req)
-            guard let http = resp as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-
-            #if DEBUG
-            print("PATCH status:", http.statusCode)
-            print("PATCH body:", String(data: data, encoding: .utf8) ?? "<non-UTF8 or empty>")
-            #endif
-
-            guard (200..<300).contains(http.statusCode) else { throw URLError(.badServerResponse) }
-
-            // If server ever returns 204 or an empty body, just end cleanly.
-            if data.isEmpty {
-                await MainActor.run {
-                    self.isEditing = false
-                    self.errorMessage = nil
-                    self.onSaved?()
-                }
-                return
-            }
-
-            let updated = try JSONDecoder().decode(Gig.self, from: data)
-            
-            
-            await MainActor.run {
-                self.gig = updated
-                self.isEditing = false
-                self.errorMessage = nil
-                self.onSaved?()  // e.g. ask parent to refresh list if needed
-            }
-        } catch let encErr as EncodingError {
-            await setError("Couldn’t prepare request (encoding error).")
-            #if DEBUG
-            print("EncodingError:", encErr)
-            #endif
-        } catch let decErr as DecodingError {
-            await setError("Saved, but couldn’t read server response.")
-            #if DEBUG
-            print("DecodingError:", decErr, String(data: (try? JSONEncoder().encode(patch)) ?? Data(), encoding: .utf8) ?? "")
-            #endif
-        } catch {
-            await setError("Couldn’t save changes. Check fields and try again.")
-            #if DEBUG
-            print("Save error:", error)
-            #endif
-        }
-    }
-
-    // MARK: - Utils
-    private func formatCurrencyCents(_ cents: Int) -> String {
-        let pounds = Double(cents) / 100.0
-        let f = NumberFormatter()
-        f.numberStyle = .currency
-        f.currencyCode = "GBP"
-        return f.string(from: NSNumber(value: pounds)) ?? "£\(pounds)"
-    }
-}
-
-struct GigPatch: Encodable {
-    var date: String?
-    var client_email: String?
-    var fee: Int?
-    var notes: String?
-    var assigned_ids: [Int]?
-}
-
-
-/// Simple wrapping HStack for tags
-struct WrapHStack<Content: View>: View {
-    let spacing: CGFloat
-    @ViewBuilder var content: () -> Content
-
-    init(spacing: CGFloat = 8, @ViewBuilder content: @escaping () -> Content) {
-        self.spacing = spacing
-        self.content = content
-    }
-
-    var body: some View {
-        var width: CGFloat = 0
-        var height: CGFloat = 0
-        return GeometryReader { geo in
-            ZStack(alignment: .topLeading) {
-                content()
-                    .fixedSize()
-                    .alignmentGuide(.leading) { d in
-                        if (abs(width - d.width) > geo.size.width) {
-                            width = 0
-                            height -= d.height + spacing
+                        if draft.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Text("No notes").foregroundStyle(.secondary)
+                        } else {
+                            Text(draft.notes).frame(maxWidth: .infinity, alignment: .leading)
                         }
-                        let result = width
-                        width -= d.width + spacing
-                        return result
                     }
-                    .alignmentGuide(.top) { _ in
-                        let result = height
-                        return result
+                }
+
+                // ===== Assignments (Disclosure / Dropdown) =====
+                Card {
+                    DisclosureGroup(isExpanded: $showAssignments) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if isEditing {
+                                ForEach(allGents) { gent in
+                                    Toggle(isOn: Binding(
+                                        get: { draft.gent_ids.contains(gent.id) },
+                                        set: { on in
+                                            if on {
+                                                if !draft.gent_ids.contains(gent.id) { draft.gent_ids.append(gent.id) }
+                                            } else {
+                                                draft.gent_ids.removeAll { $0 == gent.id }
+                                            }
+                                        })) {
+                                            Text(gent.name)
+                                        }
+                                }
+                            } else {
+                                let assigned = allGents.filter { draft.gent_ids.contains($0.id) }
+                                if assigned.isEmpty {
+                                    Text("No gents assigned").foregroundStyle(.secondary)
+                                } else {
+                                    // Reliable wrapping chips via adaptive grid
+                                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 8)], spacing: 8) {
+                                        ForEach(assigned) { gent in
+                                            Text(gent.name)
+                                                .padding(.vertical, 4)
+                                                .padding(.horizontal, 10)
+                                                .background(.blue.opacity(0.12))
+                                                .foregroundStyle(.blue)
+                                                .clipShape(Capsule())
+                                        }
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
+                        }
+                        .padding(.top, 8)
+                    } label: {
+                        HStack {
+                            Text("Assignments").font(.headline)
+                            Spacer()
+                            Text("\(draft.gent_ids.count) selected")
+                                .foregroundStyle(.secondary)
+                            Image(systemName: "chevron.down")
+                                .rotationEffect(.degrees(showAssignments ? 180 : 0))
+                                .animation(.easeInOut(duration: 0.2), value: showAssignments)
+                        }
                     }
+                }
             }
-        }.frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-struct GigRow: View {
-    let gig: Gig
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Date: \(gig.date)").font(.headline)
-            HStack {
-                Text("Client: \(gig.client_email)")
-                Spacer()
-                Text(currency(gig.fee)).monospaced()
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .navigationTitle(draft.title.isEmpty ? "Gig" : draft.title)
+        .toolbar {
+            if canEdit {
+                if isEditing {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") {
+                            draft = gig
+                            feeText = String(gig.fee)
+                            isEditing = false
+                        }
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Save") {
+                            if let f = Double(feeText.replacingOccurrences(of: ",", with: ".")) {
+                                draft.fee = f
+                            }
+                            onSave(draft)
+                            isEditing = false
+                        }
+                        .keyboardShortcut(.return, modifiers: [.command])
+                    }
+                } else {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button("Edit") { startEditingNow() }
+                    }
+                }
             }
-            .font(.subheadline)
         }
-        .padding(.vertical, 4)
+        .onChange(of: gig.id) { _, _ in
+            draft = gig
+            feeText = String(gig.fee)
+            isEditing = startEditing && canEdit && gig.id == -1
+        }
     }
-    private func currency(_ cents: Int) -> String {
-        let pounds = Double(cents) / 100.0
-        return String(format: "£%.2f", pounds)
+
+    private func startEditingNow() {
+        draft = gig
+        feeText = String(gig.fee)
+        isEditing = true
+        showAssignments = true
     }
 }
 
-struct ContentPlaceholder: View {
-    var title: String
+private struct Card<Content: View>: View {
+    var header: String?
+    @ViewBuilder var content: Content
+
+    init(header: String? = nil, @ViewBuilder content: () -> Content) {
+        self.header = header
+        self.content = content()
+    }
+
     var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "rectangle.and.text.magnifyingglass")
-                .font(.system(size: 36))
-                .foregroundStyle(.secondary)
-            Text(title).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 10) {
+            if let header { Text(header).font(.headline) }
+            content
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.background)
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.secondary.opacity(0.15)))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 }
-
-
