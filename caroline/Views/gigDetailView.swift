@@ -8,6 +8,7 @@
 import SwiftUI
 
 struct GigDetailView: View {
+    
     // Input
     var gig: Gig
     let allGents: [Gent]

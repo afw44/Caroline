@@ -20,6 +20,7 @@
 		F8D476B82E51F426004D0AC4 /* gigDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8D476B72E51F426004D0AC4 /* gigDetailView.swift */; };
 		F8D476BB2E521199004D0AC4 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8D476BA2E521199004D0AC4 /* AppState.swift */; };
 		F8D476BD2E5211C5004D0AC4 /* APIclient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8D476BC2E5211C5004D0AC4 /* APIclient.swift */; };
+		F8D476C02E537465004D0AC4 /* gigView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8D476BF2E537465004D0AC4 /* gigView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -57,6 +58,7 @@
 		F8D476B72E51F426004D0AC4 /* gigDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = gigDetailView.swift; sourceTree = "<group>"; };
 		F8D476BA2E521199004D0AC4 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		F8D476BC2E5211C5004D0AC4 /* APIclient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIclient.swift; sourceTree = "<group>"; };
+		F8D476BF2E537465004D0AC4 /* gigView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = gigView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -146,6 +148,7 @@
 			isa = PBXGroup;
 			children = (
 				F8D476822E504482004D0AC4 /* ContentView.swift */,
+				F8D476BF2E537465004D0AC4 /* gigView.swift */,
 				F8D476B72E51F426004D0AC4 /* gigDetailView.swift */,
 				F8D476B32E51F30A004D0AC4 /* genericUI.swift */,
 				F8D476B52E51F3D9004D0AC4 /* availabilityUI.swift */,
@@ -295,6 +298,7 @@
 			files = (
 				F8D476832E504482004D0AC4 /* ContentView.swift in Sources */,
 				F8D476B42E51F30A004D0AC4 /* genericUI.swift in Sources */,
+				F8D476C02E537465004D0AC4 /* gigView.swift in Sources */,
 				F8D476BB2E521199004D0AC4 /* AppState.swift in Sources */,
 				F8D476BD2E5211C5004D0AC4 /* APIclient.swift in Sources */,
 				F8D476812E504482004D0AC4 /* carolineApp.swift in Sources */,
